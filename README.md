@@ -9,7 +9,7 @@ written by Hermitude (Hermit#2408 on Discord).
 ## Dependencies
 
 * GraphViz (creating .dot then outputing .svg)
-* ImageMagick (converting ssvg -> .png)
+* ImageMagick (converting .svg -> .png)
 
 ## Syntax
 
