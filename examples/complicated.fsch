@@ -1,0 +1,7 @@
+schema {
+  produce     0.2/s flying-robot-frame using assembling-machine-1
+	produce     1/s advanced-circuit using assembling-machine-1
+	produce     iron-plate using electric-furnace
+	produce     copper-plate using electric-furnace
+	exclude     "ore"
+}
