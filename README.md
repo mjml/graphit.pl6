@@ -31,5 +31,5 @@ gives:
 ![complicated.png](./examples/complicated.png)
 
 If you don't supply a basedir, it will use the current directory. This directory should correspond to the
-  base of your Ffactorio installation, i.e.: where the `data/` and `bin/` directories live.
+  base of your Factorio installation, i.e.: where the `data/` and `bin/` directories live.
 
