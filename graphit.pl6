@@ -1,11 +1,10 @@
 #!/bin/perl6
-
-#use Grammar::Tracer;
 use v6;
+#use Grammar::Tracer;
 
-my %crafting_speed = %( "assembling-machine" => 0.5,
-												"assembling-machine-1" => 0.75,
-												"assembling-machine-2" => 1.25,
+my %crafting_speed = %( "assembling-machine-1" => 0.5,
+												"assembling-machine-2" => 0.75,
+												"assembling-machine-3" => 1.25,
 												"stone-furnace"      => 1,
 												"steel-furnace"      => 2,
 												"electric-furnace"   => 2,
@@ -14,7 +13,8 @@ my %crafting_speed = %( "assembling-machine" => 0.5,
 
 grammar RecipeFile {
 
-	rule TOP { <.ws> 'data' ':' 'extend' '(' <factorio-defs>  ')' <.ws> }
+	rule TOP { <.ws> 'data' ':' 'extend' [ <outer1> | <factorio-defs> ] <.ws> }
+	rule outer1 { '(' <factorio-defs> ')' }
 	rule factorio-defs { '{' <factorio-def>* %% ',' '}' }
 	rule factorio-def { '{' <kv>+ %% ',' '}' }
   rule kv { <symb> '=' <rvalue-any> }
@@ -30,13 +30,13 @@ grammar RecipeFile {
 
 class RecipeActions
 {
-	method TOP($/) { $/.make: $<factorio-defs>.made}
-	method factorio-defs($/) {
-		$/.make: %( $<factorio-def>>>.made );
-	}
+	method TOP($/) { $/.make: ($<factorio-defs> // $<outer1>).made; }
+	method outer1($/) { $/.make( $<factorio-defs>.made ) }
+	method factorio-defs($/) { $/.make: %( $<factorio-def>>>.made ); }
 	method factorio-def($/) {
 		my %h = Hash.new( $/<kv>>>.made );
 		$/.make(%h{'name'} => %h);
+		say %h{'name'};
 	}
 	method kv($/) {
 		my $kv = $<symb>.made => $<rvalue-any>.made;
@@ -187,10 +187,12 @@ sub MAIN(FileName $schemafile, Dir :d(:$basedir) = $*CWD.path, Bool :t(:$testmod
 	say "Parsing in $basedir...";
 	my @files;
 	@files = ($basedir.Str ~ "/data/base/prototypes/recipe").IO.dir(test => {!.IO.d} );
-	if ($testmode) { @files = ( $basedir.Str ~ "/data/base/prototypes/recipe/inserter.lua".IO )	}
+	say @files.elems ~ " files found.";
+	if ($testmode) { @files = ( $basedir.Str ~ "/data/base/prototypes/recipe/circuit-network.lua".IO )	}
 	for @files -> $file {
 		my $text = $file.path.IO.slurp();
 		$text ~~ s:g/\-\-.*?$$//;
+		say "Parsing " ~ $file.path;
 		my %h = RecipeFile.parse($text, actions=>RecipeActions.new).made;
 		%recipes{%h.keys} = %h.values;
 	}
@@ -208,7 +210,7 @@ sub MAIN(FileName $schemafile, Dir :d(:$basedir) = $*CWD.path, Bool :t(:$testmod
 	my @nodes = %plan{'produce'}.values;
 	my @dotnodes = @nodes.map: -> BuildNode $node {
 		# minor hack: don't show factory type or number if there are no ingredients (ie: basic ores, oil, etc)
-		my Str $fdesc = "using %i of %s".sprintf($node.factories, $node.assembler_type) if ($node.requirements.elems > 0);
+		my Str $fdesc = ($node.requirements.elems > 0) ?? "using %i of %s".sprintf($node.factories, $node.assembler_type) !! "";
 		sprintf("\"%s\" [ width=%f, height=%f, label=\"%s\noutput_rate=%.3g/s\n%s\" fontsize=\"10\" shape=\"rect\" ]\n\n",
 						$node.name, sqrt((3 * $node.factories + 1)/5), 0.8, $node.name, $node.output_rate, $fdesc)
 	};
