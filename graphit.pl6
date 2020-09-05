@@ -36,7 +36,7 @@ class RecipeActions
 	method factorio-def($/) {
 		my %h = Hash.new( $/<kv>>>.made );
 		$/.make(%h{'name'} => %h);
-		say %h{'name'};
+		#say %h{'name'};
 	}
 	method kv($/) {
 		my $kv = $<symb>.made => $<rvalue-any>.made;
@@ -81,7 +81,7 @@ class BuildNode {
 }
 
 grammar Schema {
-  rule TOP { <.ws> 'schema' '{' <produce-stmt>* <exclude-stmt>* '}' }
+  rule TOP { <.ws> <produce-stmt>* <exclude-stmt>* }
 	rule produce-stmt { 'produce' <rate>?  <identifier> <using-clause>? }
 	token rate { <number> \/ <unit> }
 	token number { <digit>+ [\.<digit>+]? }
@@ -165,16 +165,16 @@ sub compute_structure(BuildNode:D $node, Num $more)
 			my $asm =
 			!%recipes{$ingredient}                              ?? '' !!
 			%plan{"produce"}{$ingredient}                       ?? %plan{"produce"}{$ingredient}.assembler_type !! 
-			%recipes{$ingredient}<category> eq 'smelting'       ?? 'stone-furnace' !!
-			%recipes{$ingredient}<category> eq 'chemistry'      ?? 'chemical-plant' !!
-			%recipes{$ingredient}<category> eq 'oil-processing' ?? 'oil-refinery' !! $node.assembler_type;
+			%recipes{$ingredient}<category> ~~ 'smelting'       ?? 'stone-furnace' !!
+			%recipes{$ingredient}<category> ~~ 'chemistry'      ?? 'chemical-plant' !!
+			%recipes{$ingredient}<category> ~~ 'oil-processing' ?? 'oil-refinery' !! $node.assembler_type;
 			my BuildNode $cnode;
 			if (%plan{'produce'}{$ingredient}:exists) {
 				$cnode := %plan{'produce'}{$ingredient}
 			} else {
 				$cnode := %plan{'produce'}{$ingredient} := BuildNode.new($ingredient, $asm);
 			}
-			say sprintf("Adding %ix%i to %s due to %s", $more, $quantity, $cnode.name, $node.name);
+			say sprintf("Adding %5.3fx%5.3f to %s due to %s", $more, $quantity, $cnode.name, $node.name);
 			$cnode.output_rate += $more * $quantity;
 			compute_structure($cnode, $more * $quantity);
 			return $cnode;
@@ -182,31 +182,33 @@ sub compute_structure(BuildNode:D $node, Num $more)
 	$node.requirements = %ingredients;
 }
 
-sub MAIN(FileName $schemafile, Dir :d(:$basedir) = $*CWD.path, Bool :t(:$testmode) = False)
+sub MAIN(Str $schema, Str :d(:$basedir) = "abc", Bool :t(:$testmode) = False)
 {	
-	say "Parsing in $basedir...";
-	my @files;
-	@files = ($basedir.Str ~ "/data/base/prototypes/recipe").IO.dir(test => {!.IO.d} );
-	say @files.elems ~ " files found.";
-	if ($testmode) { @files = ( $basedir.Str ~ "/data/base/prototypes/recipe/circuit-network.lua".IO )	}
+	my $user  = %*ENV{"USER"};
+	my $dir = -> $d { $d.e ?? $d !! "/home/$user/.local/share/Steam/steamapps/common/Factorio".IO }($basedir.IO);
+	my @files = ($dir.path ~ "/data/base/prototypes/recipe").IO.dir(test => {!.IO.d} );
+	
+	
+	#say @files.elems ~ " files found.";
+	if ($testmode) { @files = ( $dir.Str ~ "/data/base/prototypes/recipe/circuit-network.lua".IO )	}
 	for @files -> $file {
 		my $text = $file.path.IO.slurp();
 		$text ~~ s:g/\-\-.*?$$//;
-		say "Parsing " ~ $file.path;
+		#say "Parsing " ~ $file.path;
 		my %h = RecipeFile.parse($text, actions=>RecipeActions.new).made;
 		%recipes{%h.keys} = %h.values;
 	}
 	
-	say "\nFound " ~ %recipes.elems ~ ":";
-	say %recipes.keys;
+	#say "\nFound " ~ %recipes.elems ~ ":";
+	#say %recipes.keys;
+
+	my ($schematext, $isfile) = -> $f { $f.IO.e ?? ($f.IO.slurp(), True) !! ($f, False) }($schema);
+	my $schemafile = $isfile ?? $schema.path !! "graph.fsch";
 	
-	say "\nReading Schema $schemafile";
-	my $schema = $schemafile.IO.slurp();
 	%plan = Schema.parse($schema, actions => SchemaParser.new).made;
 	%plan{'produce'}.values.map( { compute_structure($_, $_.output_rate) } );	
 	%plan{"produce"}.values.map({ say $_; });
 
-	say "\n";
 	my @nodes = %plan{'produce'}.values;
 	my @dotnodes = @nodes.map: -> BuildNode $node {
 		# minor hack: don't show factory type or number if there are no ingredients (ie: basic ores, oil, etc)
@@ -223,12 +225,11 @@ sub MAIN(FileName $schemafile, Dir :d(:$basedir) = $*CWD.path, Bool :t(:$testmod
 	}
 
 	my ($dotfile, $svgfile, $pngfile);
-	
-	given $schemafile {
-		$dotfile = S/\.fsch$/\.dot/;
-		$svgfile = S/\.fsch/\.svg/;
-		$pngfile = S/\.fsch/\.png/
-	}
+
+	$_ = $isfile ?? $schema !! "graph.fsch";
+	$dotfile = S/\.fsch$/\.dot/;
+	$svgfile = S/\.fsch$/\.svg/;
+	$pngfile = S/\.fsch$/\.png/;
 	
 	my $dottext = sprintf("digraph \{\n%s\n%s\}\n", ([~] @dotnodes), ([~] @dotedges));
 	say $dottext;
