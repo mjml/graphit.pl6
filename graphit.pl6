@@ -87,7 +87,7 @@ grammar Schema {
 	token number { <digit>+ [\.<digit>+]? }
 	token identifier { <alpha>[<[\-]>|<alnum>]* }
 	rule using-clause { 'using' <identifier> }
-	rule exclude-stmt { 'exclude' <regex>+ % ',' }
+	rule exclude-stmt { 'exclude' <identifier>+ % ',' }
 	rule regex {"\x22" <-[\x22]>* "\x22"}
 	token unit {s|m|h}
 }
@@ -99,7 +99,7 @@ class SchemaParser
 	method number($/) { $/.make: $/.Str.Num }
 	method unit($/) { $/.make: $/.Str }
 	method regex($/) { $/.make: $/.Str.subst(1,$/.Str.chars-2) }
-	method exclude-stmt($/) { $/.make: $<regex>>>.made }
+	method exclude-stmt($/) { $/.make: $<identifier>>>.made }
 	method using-clause($/) { $/.make: $<identifier>.made }
 	method produce-stmt($/) {
 		my BuildNode $node;
@@ -113,7 +113,7 @@ class SchemaParser
 	}
 	method TOP($/) {
 		my %h = $<produce-stmt>>>.made.reduce( sub (Hash $c, Hash $d) { return $c.append: $d.kv } );
-		my @e = $<exclude-stmt>>>.made>>.List.flat;
+		my @e = $<exclude-stmt>>>.made.List.flat;
 		$/.make({ "produce" => %h, "exclude" => @e });
 	}
 }
@@ -124,6 +124,9 @@ subset FileName of Str where .IO.f;
 my %recipes = %();
 my %plan = %();
 my @queue = ();
+my $modebits;
+my $MODE_LIST = 0x01;
+my $MODE_VERBOSE = 0x02;
 
 sub compute_structure(BuildNode:D $node, Num $more)
 {
@@ -135,21 +138,26 @@ sub compute_structure(BuildNode:D $node, Num $more)
 	my $energy_required = %r{"energy_required"} // %r{"normal"}{"energy_required"} // 0.5;
 	my $products = %recipes{$node.name}{"result_count"} || 1;
 
-	$node.factories = ceiling($node.output_rate * $energy_required / $crafting_speed / $products);
-	say sprintf("\n*** %s: f = ceil(o * e / s / p) = ceil(%4f * %4f / %4f / %4f) = %f",
-							$node.name, $node.output_rate , $energy_required , $crafting_speed , $products, $node.factories);
+	my $factory_frac = $node.output_rate * $energy_required / $crafting_speed / $products;
+	$node.factories = ceiling($factory_frac);
+	say sprintf("\n*** %s: f = ceil(o * e / s / p) = ceil(%4f * %4f / %4f / %4f) = ceil(%f)",
+							$node.name, $node.output_rate , $energy_required , $crafting_speed , $products, $factory_frac) if $modebits & $MODE_VERBOSE;
 	
 	%plan{$node.name} := $node;
-
+	
 	my %ingredients = %();
 	if (%r{'normal'}:exists) {
-		say "Difficulty-selected recipe ingredients";
 		%ingredients = %r{'normal'}{'ingredients'};
-		say %ingredients.gist;
+		if ($modebits & $MODE_VERBOSE) {
+			say "Difficulty-selected recipe ingredients";
+			say %ingredients.gist;
+		}
   } elsif (%r{'ingredients'}:exists) {
-		say "Simplified recipe ingredients";
 		%ingredients =  %r{'ingredients'};
-		say %ingredients.gist;
+		if ($modebits & $MODE_VERBOSE) {
+			say "Simplified recipe ingredients";
+			say %ingredients.gist;
+		}
 	} else {
 		warn "Couldn't find ingredients for " ~ $node.name and return;
 	}
@@ -159,59 +167,72 @@ sub compute_structure(BuildNode:D $node, Num $more)
 		when .<type>:exists { $_<name> => ($_<amount>, $_<type>) }
 	}
 
+	my %filtered = %ingredients.grep({ not %plan<exclude>.grep($_.key) });
 	
-	my @new_nodes = %ingredients.kv.map(
-		sub ($ingredient, ($quantity, $type)) {
+	for %filtered.kv -> $ingredient, ($quantity, $type) {
+
+		my BuildNode $cnode;
+		if (%plan{'produce'}{$ingredient}:exists) {
+			$cnode := %plan{'produce'}{$ingredient}
+		} else {
 			my $asm =
-			!%recipes{$ingredient}                              ?? '' !!
-			%plan{"produce"}{$ingredient}                       ?? %plan{"produce"}{$ingredient}.assembler_type !! 
-			%recipes{$ingredient}<category> ~~ 'smelting'       ?? 'stone-furnace' !!
-			%recipes{$ingredient}<category> ~~ 'chemistry'      ?? 'chemical-plant' !!
-			%recipes{$ingredient}<category> ~~ 'oil-processing' ?? 'oil-refinery' !! $node.assembler_type;
-			my BuildNode $cnode;
-			if (%plan{'produce'}{$ingredient}:exists) {
-				$cnode := %plan{'produce'}{$ingredient}
-			} else {
-				$cnode := %plan{'produce'}{$ingredient} := BuildNode.new($ingredient, $asm);
-			}
-			say sprintf("Adding %5.3fx%5.3f to %s due to %s", $more, $quantity, $cnode.name, $node.name);
-			$cnode.output_rate += $more * $quantity;
-			compute_structure($cnode, $more * $quantity);
-			return $cnode;
-		});
-	$node.requirements = %ingredients;
+			  !%recipes{$ingredient}                              ?? '' !!
+        %plan{"produce"}{$ingredient}                       ?? %plan{"produce"}{$ingredient}.assembler_type !! 
+        %recipes{$ingredient}<category> ~~ 'smelting'       ?? 'stone-furnace' !!
+        %recipes{$ingredient}<category> ~~ 'chemistry'      ?? 'chemical-plant' !!
+        %recipes{$ingredient}<category> ~~ 'oil-processing' ?? 'oil-refinery' !! $node.assembler_type;
+      $cnode := %plan{'produce'}{$ingredient} := BuildNode.new($ingredient, $asm);
+		}
+		say sprintf("Adding %5.3fx%5.3f to %s due to %s", $more, $quantity, $cnode.name, $node.name) if $modebits & $MODE_VERBOSE;
+		$cnode.output_rate += $more * $quantity;
+
+		compute_structure($cnode, $more * $quantity);
+	}
+	$node.requirements = %filtered;
 }
 
-sub MAIN(Str $schema, Str :d(:$basedir) = "abc", Bool :t(:$testmode) = False)
+sub MAIN(Str $schema, Str :d(:$basedir) = "abc", Bool :t(:$testmode) = False, Bool :l($listmode), Bool :v($verbose))
 {	
 	my $user  = %*ENV{"USER"};
 	my $dir = -> $d { $d.e ?? $d !! "/home/$user/.local/share/Steam/steamapps/common/Factorio".IO }($basedir.IO);
 	my @files = ($dir.path ~ "/data/base/prototypes/recipe").IO.dir(test => {!.IO.d} );
+	$modebits |= $MODE_LIST if $listmode;
+	$modebits |= $MODE_VERBOSE if $verbose;
 	
-	
-	#say @files.elems ~ " files found.";
 	if ($testmode) { @files = ( $dir.Str ~ "/data/base/prototypes/recipe/circuit-network.lua".IO )	}
 	for @files -> $file {
 		my $text = $file.path.IO.slurp();
 		$text ~~ s:g/\-\-.*?$$//;
-		#say "Parsing " ~ $file.path;
 		my %h = RecipeFile.parse($text, actions=>RecipeActions.new).made;
 		%recipes{%h.keys} = %h.values;
 	}
 	
-	#say "\nFound " ~ %recipes.elems ~ ":";
-	#say %recipes.keys;
-
 	my ($schematext, $isfile) = -> $f { $f.IO.e ?? ($f.IO.slurp(), True) !! ($f, False) }($schema);
 	my $schemafile = $isfile ?? $schema.path !! "graph.fsch";
 	
 	%plan = Schema.parse($schema, actions => SchemaParser.new).made;
-	%plan{'produce'}.values.map( { compute_structure($_, $_.output_rate) } );	
-	%plan{"produce"}.values.map({ say $_; });
+	#say %plan if $modebits & $MODE_VERBOSE;
+	#%plan{'produce'}.values.map( { compute_structure($_, $_.output_rate) } );
+	#say "Exclude: " ~ %plan<exclude>;
+	my @exclude := %plan<exclude>;
+	if @exclude.grep("bus") {
+    %plan<exclude>.append: "ore", "plate";
+  }
+	if @exclude.grep("ore") {
+		%plan<exclude>.append: "coal", "iron-ore", "copper-ore", "stone";
+	}
+	if @exclude.grep("plate") {
+    %plan<exclude>.append: "iron-plate", "copper-plate", "brick", "steel-plate";
+  }
 
+	say "Exclude: " ~ %plan<exclude> if $modebits & $MODE_VERBOSE;
+
+	for %plan{'produce'}.values -> $ingredient {
+		compute_structure($ingredient, $ingredient.output_rate);
+	}
+	
 	my @nodes = %plan{'produce'}.values;
 	my @dotnodes = @nodes.map: -> BuildNode $node {
-		# minor hack: don't show factory type or number if there are no ingredients (ie: basic ores, oil, etc)
 		my Str $fdesc = ($node.requirements.elems > 0) ?? "using %i of %s".sprintf($node.factories, $node.assembler_type) !! "";
 		sprintf("\"%s\" [ width=%f, height=%f, label=\"%s\noutput_rate=%.3g/s\n%s\" fontsize=\"10\" shape=\"rect\" ]\n\n",
 						$node.name, sqrt((3 * $node.factories + 1)/5), 0.8, $node.name, $node.output_rate, $fdesc)
@@ -232,13 +253,13 @@ sub MAIN(Str $schema, Str :d(:$basedir) = "abc", Bool :t(:$testmode) = False)
 	$pngfile = S/\.fsch$/\.png/;
 	
 	my $dottext = sprintf("digraph \{\n%s\n%s\}\n", ([~] @dotnodes), ([~] @dotedges));
-	say $dottext;
+	#say $dottext;
 	$dotfile.IO.spurt($dottext);
-	say "\n$dotfile";	
+	#say "\n$dotfile";	
 	qqx{ dot -Tsvg $dotfile > $svgfile  };
-	say $svgfile;
+	#say $svgfile;
 	qqx{ convert $svgfile -size 1024x960 $pngfile };
-	say $pngfile;
+	#say $pngfile;
 	qqx{ chrome $pngfile };
 	qqx{ rm -rf $svgfile $dotfile }
 }
