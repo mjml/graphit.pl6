@@ -1,6 +1,6 @@
 #!/bin/perl6
 use v6;
-#use Grammar::Tracer;
+use Grammar::Tracer;
 
 my %crafting_speed = %( "assembling-machine-1" => 0.5,
 												"assembling-machine-2" => 0.75,
@@ -210,7 +210,7 @@ sub MAIN(Str $schema, Str :d(:$basedir) = "abc", Bool :t(:$testmode) = False, Bo
 	my ($schematext, $isfile) = -> $f { $f.IO.e ?? ($f.IO.slurp(), True) !! ($f, False) }($schema);
 	my $schemafile = $isfile ?? $schema.path !! "graph.fsch";
 	
-	%plan = Schema.parse($schema, actions => SchemaParser.new).made;
+	%plan = Schema.parse($schematext, actions => SchemaParser.new).made;
 	#say %plan if $modebits & $MODE_VERBOSE;
 	#%plan{'produce'}.values.map( { compute_structure($_, $_.output_rate) } );
 	#say "Exclude: " ~ %plan<exclude>;
